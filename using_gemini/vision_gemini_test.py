@@ -4,101 +4,117 @@ import google.generativeai as genai
 import io
 
 # Initialize the model correctly
-model_name = "gemini-1.5-pro-latest"  # 欲使用的模型名稱
+model_name = "gemini-1.5-pro-latest"  # Desired model name
+# model_name = "gemini-1.5-flash-8b-exp-0827" 
 
 # Define the path to the image
-image_path = "test_images/000020.JPG"
+image_path = "test_images/000010.JPG"
+
+# Define the number of the kind of food we want to detect in the image
+num_kind = 1
 
 # =================================================================================================================
 
-# 設定 Google Cloud Vision API 的憑證
-credentials = service_account.Credentials.from_service_account_file('gen-lang-client-0841175445-3c8fcf49ac4d.json')
+# Set up Google Cloud Vision API credentials
+credentials = service_account.Credentials.from_service_account_file('gen-lang-client-0841175445-a7b8df25933b.json')
 client = vision.ImageAnnotatorClient(credentials=credentials)
 
-# 設定 Generative AI 的 API 金鑰
-genai.configure(api_key="AIzaSyClnOnxcwExwbdGAwgaD0MaTSRBaM7hXOY")
+# Set up Generative AI API key
+genai.configure(api_key="AIzaSyBjfGIaKXnXZaQqp72UghpcDjnBFu7tRC0")
 
-# 設定生成配置
+# Set up generation config
 generation_config = {
-    "temperature": 1,
+    "temperature": 0.7,  # Lower temperature for more focused output
     "top_p": 0.95,
-    "top_k": 64,
-    "max_output_tokens": 8192,
+    "top_k": 50,  # Slightly lower top_k for more concentrated predictions
+    "max_output_tokens": 512,  # Reduced max tokens for efficiency
     "response_mime_type": "text/plain",
 }
 
-# 讀取圖片並轉換為二進制格式
+# Read image and convert to binary
 def load_image(image_path):
     with io.open(image_path, 'rb') as image_file:
         content = image_file.read()
     return content
 
-# 分析圖片的內容，提取文字和物品描述
+# Analyze image content for text and object labels
 def analyze_image(image_path):
     image = vision.Image(content=load_image(image_path))
     
-    # 提取文字
+    # Extract text from image
     text_response = client.text_detection(image=image)
     texts = text_response.text_annotations
     
-    # 提取所有的文字
+    # Extract full text
     full_text = ""
     if texts:
         full_text = texts[0].description.strip()
     
-    # 處理Vision API的錯誤
+    # Handle Vision API errors
     if text_response.error.message:
         raise Exception(f'Vision API Text Error: {text_response.error.message}')
 
-    # 標籤檢測來描述物品
+    # Detect labels (objects) in the image
     label_response = client.label_detection(image=image)
-    labels = label_response.label_annotations #
+    labels = label_response.label_annotations
 
-    # 提取所有標籤描述
+    # Extract label descriptions
     label_descriptions = []
     for label in labels:
         label_descriptions.append(label.description)
     
-    # 處理Vision API的錯誤
+    # Handle Vision API errors
     if label_response.error.message:
         raise Exception(f'Vision API Label Error: {label_response.error.message}')
     
     return full_text, label_descriptions
 
-# 使用圖片路徑來提取圖片中的文字和物品描述
+# Extract text and objects from the image using the image path
 extracted_text, object_descriptions = analyze_image(image_path)
 
-# 創建一個問題或提示文本
+# Generate the prompt for the Gemini model
 prompt_text = (
-    f"The image contains the following text: {extracted_text}\n"
-    f"The image seems to have the following objects: {', '.join(object_descriptions)}.\n"
-    f"Based on the objects and text identified in the image, please pick the most possible object. List the object with its probabilities.\n"
-
-    f"- Be specific in your identification: for example, specify the type of fruit or food rather than using a general term like \"food.\"\n"
-    f"- If multiple objects are identified, list all of them with their respective probabilities.\n"
-    f"- If you can find the expiry date of any object, please include it in the format MM/DD/YYYY and explain where did you find the expiry date of the item. If there is no apparent expiry date shown, show \"None\"\n"
-
-    f"Format your response exactly as follows: \n"
-    f"Objects: [The only one object that is most likely to be] Probability: [confidence percentages] Expiry Date: [MM/DD/YYYY], [the place you found it]\n"
-
-    f"Please do not include any additional text or explanation beyond this specified format."
+    f"Below are the details extracted from an image that has already been analyzed:\n"
+    f"Text in the image: {extracted_text}\n"
+    f"The following foods were identified in the image: {', '.join(object_descriptions)}.\n"
+    f"Please be very specific in identifying **exact food names** (such as 'scrambled egg' instead of generic terms like 'food').\n"
+    f"Based on the image, provide the name of the food with **precise identification**, "
+    f"and format the response as a JSON object (make sure the indentation is correct). "
+    f"For each food, list the top {num_kind} kinds of food with the highest confidence percentages, along with their respective expiry dates or estimated storage days.\n"
+    f"Make sure the food names are **clear and commonly recognized**, avoiding generic terms like '食物' or 'food.'\n"
+    f"Moreover, include the **exact total quantity** of each kind of food, without breaking it down into different types or varieties.\n"
+    f"For example, if the image contains 3 oranges, regardless of their specific types, the response should be:\n"
+    f"object: [{{'text': 'orange', 'quantity': '3', 'confidence': '90%'}}]\n"
+    f"For foods without packaging, provide estimated storage days based on your knowledge, treating the food as fresh. "
+    f"If no expiry date is available, estimate the storage days based on general knowledge.\n"
+    f"Each response should be **detailed and concise**, focusing solely on the requested information.\n"
+    f"Output format:\n"
+    f"1. 'object': Array of {{'text': '<name of the food>', 'quantity': '<quantity>', 'confidence': '<confidence percentage>'}}\n"
+    f"2. 'expiry': Array of {{'text': '<expiry date (MUST be in the format of **MM/DD/YYYY**) or number of storage days>', 'type': 'days' or 'date', 'confidence': '<confidence percentage>'}}\n"
+    f"3. 'location': Array of {{'object': {{'text': '<location description>', 'confidence': '<confidence percentage>'}}}}\n"
+    f"The length of all the arrays **must be exactly {num_kind}** to match the number of top foods identified.\n"
+    f"Ensure that the JSON response is structured accordingly, without any additional information beyond what is requested.\n"
+    f"Additionally, please **DO NOT include** ```json and ``` at the beginning and the end of your response. Thank you.\n"
+    f"Responses must be provided in Traditional Chinese and ensure there is an empty line between each section in the response.\n"
+    f"Before finalizing the response, ensure that you have only included the total count for each food type, without specifying different varieties."
 )
+
 
 # Generate text using the Generative AI API
 try:
-    # 初始化模型
+    # Initialize the model
     model = genai.GenerativeModel(
         model_name=model_name,
         generation_config=generation_config
     )
     
-    # 開始聊天會話
+    # Start a chat session
     chat_session = model.start_chat(history=[])
     
-    # 發送消息
+    # Send the message
     response = chat_session.send_message(prompt_text)
     
-    # 提取和印出生成的文本
+    # Extract and print the generated text
     response_text = ''.join([part.text for part in response.parts])
     print("\nGenerated Response:")
     print(response_text)
